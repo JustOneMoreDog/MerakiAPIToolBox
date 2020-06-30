@@ -43,4 +43,4 @@ You are more than welcome to fork this repository, make your changes and submit 
 As always, you should understand the code you are running and in what environment you are running it in. These scripts are provided "as is". See the license file for more information.   
 
 ### Why?
-I found myself working with Meraki at my job and found the API to be more responsive and handle bulk changes better than the Dashboard. I also wanted to learn Python as I had not worked with it prior to this. Thus this seemed like the perfect oppurtunity to both learn Python and make my job easier. This started out with just being able to find switches on my network but kept growing until it reached where it is today.
+I found myself working with Meraki at my job and found the API to be more responsive and handle bulk changes better than the Dashboard. I also wanted to learn Python as I had not worked with it prior to this. Thus, this seemed like the perfect opportunity to both learn Python and make my job easier. This started out with just being able to find switches on my network but kept growing until it reached where it is today.
