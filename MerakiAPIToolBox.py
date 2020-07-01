@@ -122,25 +122,64 @@ def getDevice(dashboard, networks, name):
             if device['name'].lower() == name.lower()]
 
 
+# Credit to FMteuchter on reddit for this code.  I modified it a little to fit this program as a whole
+# I have only been working with 1 organization so this code will allow a user to work with several
+def getOrganizations(dashboard):
+    # Getting a list of Orgs
+    orgs = [['#', 'Name', 'ID']]
+    organizations = None
+    try:
+        organizations = dashboard.organizations.getOrganizations()
+    except mer.APIError as e:
+        print(f"Meraki API error: {e}")
+        return None
+    except Exception as e:
+        print(f"Some other error: {e}")
+        return None
+    # Printing the list of Orgs and prompting the input of one, input is validated until it matches
+    for x, org in enumerate(organizations):
+        orgs.append([
+            x+1,
+            org["name"],
+            org["id"]
+        ])
+    print(tabulate(orgs, headers='firstrow'))
+    chosenOrgs = []
+    print("Please choose the organizations you want to work with one at a time")
+    print("Enter 0 once finished")
+    choice = input("=> ").strip()
+    while choice != "0":
+        if is_int(choice) and int(choice) <= len(organizations) and organizations[int(choice)-1] not in chosenOrgs:
+            chosenOrgs.append(organizations[int(choice)-1])
+            choice = input("=> ").strip()
+        else:
+            print("Invalid selection.  Please choose a number between 1 and %d or 0 to break" % len(organizations))
+            choice = input("=> ").strip()
+            continue
+
+    return chosenOrgs
+
 # Organization => Networks => Devices => Clients
 # This will return to us a list of networks
 # If a filter exists, it will remove any networks in the filter
-def getNetworks(dashboard, filterOut):
+def getNetworks(dashboard, organizations, filterOut):
     networks = []
-    for network in dashboard.networks.getOrganizationNetworks(organizationId=orgID):
-        '''
-         not any(x in network['name'] for x in filterOut)
-         not => negates the statement
-         any() => checks if there are any true values
-         x in network['name'] => iterates through all values of network['name'] and assigns their values to x
-         x in filterOut => for each value of x check if it is in filterOut
-        '''
-        if filterOut is None:
-            networks.append(network)
-            continue
-        if not any(x.lower() in network['name'].lower() for filters in filterOut for x in filters):
-            printv("Adding the network %s" % network['name'])
-            networks.append(network)
+    for org in organizations:
+        orgID = org['id']
+        for network in dashboard.organizations.getOrganizationNetworks(organizationId=orgID):
+            '''
+             not any(x in network['name'] for x in filterOut)
+             not => negates the statement
+             any() => checks if there are any true values
+             x in network['name'] => iterates through all values of network['name'] and assigns their values to x
+             x in filterOut => for each value of x check if it is in filterOut
+            '''
+            if filterOut is None:
+                networks.append(network)
+                continue
+            if not any(x.lower() in network['name'].lower() for filters in filterOut for x in filters):
+                printv("Adding the network %s" % network['name'])
+                networks.append(network)
 
     return networks
 
@@ -160,7 +199,7 @@ def getDevices(dashboard, networks, deviceFilter, devices=None, filterOut=True, 
         devices = []
         printv("Creating a list of devices from our networks")
         for network in networks:
-            for device in dashboard.devices.getNetworkDevices(networkId=network['id']):
+            for device in dashboard.networks.getNetworkDevices(networkId=network['id']):
                 if 'name' not in device:
                     device['name'] = device['mac']
                 devices.append(device)
@@ -261,16 +300,29 @@ def is_ip(i):
 
 
 # In our main function almost all of its sub-functions will need the networks and devices variable correctly set
-def checkVariables(devices, networks, networkFilter, deviceFilter):
+def checkVariables(dashboard, devices, networks, organizations, networkFilter, deviceFilter):
+    if not organizations:
+        printi("Getting organizations")
+        organizations = getOrganizations(dashboard=dashboard)
+        if organizations is None:
+            return None, None, None
     if not networks:
         printi("Getting networks")
-        networks = getNetworks(dashboard=dashboard, filterOut=networkFilter)
+        networks = getNetworks(organizations=organizations,
+                               dashboard=dashboard,
+                               filterOut=networkFilter)
+        if networks is None:
+            return None, None, None
         networks.sort(key=lambda x: x['name'])
     if not devices:
         printi("Finding devices in networks")
-        devices = getDevices(dashboard=dashboard, networks=networks, deviceFilter=deviceFilter)
+        devices = getDevices(dashboard=dashboard,
+                             networks=networks,
+                             deviceFilter=deviceFilter)
+        if devices is None:
+            return None, None, None
         devices.sort(key=lambda x: x['name'])
-    return networks, devices
+    return organizations, networks, devices
 
 
 # Breaks our very long device list up into X columns making it easier to read
@@ -1608,19 +1660,28 @@ if __name__ == "__main__":
         apikey = input("=> ").strip()
         dashboard, found = getDashboard(apikey=apikey, maxRetry=3)
 
-    printv("Getting our organization information")
-    organizations = dashboard.organizations.getOrganizations()
-    orgID = organizations[0]['id']
+    printv("Getting our organization, network, and device information")
 
-    colors = ['red', 'yellow', 'green', 'cyan', 'blue', 'magenta'] * 5
-    title = ''.join(colored(y, colors[x]) for x, y in enumerate('Meraki API Toolbox'))
-
+    organizations = None
     networks = None
     devices = None
     macDict = dict()
     switchVlans = dict()
     switchPorts = dict()
     aggDict = None
+
+    organizations, networks, devices = checkVariables(dashboard=dashboard,
+                                                      organizations=organizations,
+                                                      networks=networks,
+                                                      devices=devices,
+                                                      networkFilter=networkFilter,
+                                                      deviceFilter=deviceFilter)
+    if organizations is None or networks is None or devices is None:
+        print("Unable to gather required information")
+        exit(-1)
+
+    colors = ['red', 'yellow', 'green', 'cyan', 'blue', 'magenta'] * 5
+    title = ''.join(colored(y, colors[x]) for x, y in enumerate('Meraki API Toolbox'))
 
     '''              '''
     ### PROGRAM LOOP ###
@@ -1659,8 +1720,7 @@ if __name__ == "__main__":
         ### FIND SWITCH ###
         '''             '''
         if choice == "1":
-            networks, devices = checkVariables(networks=networks, devices=devices,
-                                               networkFilter=networkFilter, deviceFilter=deviceFilter)
+
             prompt = "=(01)> "
             while True:
                 # Will look for a switch with a matching IP, Serial, or Name
@@ -1682,8 +1742,7 @@ if __name__ == "__main__":
         ### GET SWITCH PORT USAGE STATS ###
         '''                             '''
         if choice == "2":
-            networks, devices = checkVariables(networks=networks, devices=devices,
-                                               networkFilter=networkFilter, deviceFilter=deviceFilter)
+
             printi("Please wait as this may take a while...")
             INDENT += 1
             getPortUsageStats(dashboard=dashboard, devices=devices)
@@ -1693,8 +1752,7 @@ if __name__ == "__main__":
         ### GET CDP/LLDP INFO ###
         '''                   '''
         if choice == "3":
-            networks, devices = checkVariables(networks=networks, devices=devices,
-                                               networkFilter=networkFilter, deviceFilter=deviceFilter)
+
             prompt = "=(03)> "
             while True:
                 printi("1. Provide Serial, IP, or Name")
@@ -1724,8 +1782,6 @@ if __name__ == "__main__":
         ### PRINT ALL DEVICES ###
         '''                   '''
         if choice == "4":
-            networks, devices = checkVariables(networks=networks, devices=devices,
-                                               networkFilter=networkFilter, deviceFilter=deviceFilter)
             INDENT += 1
             printDevices(devices=devices, columns=5, detailed=True)
             INDENT -= 1
@@ -1734,8 +1790,6 @@ if __name__ == "__main__":
         ### COPY SWITCH PORT CONFIGURATION ###
         '''                                '''
         if choice == "5":
-            networks, devices = checkVariables(networks=networks, devices=devices,
-                                               networkFilter=networkFilter, deviceFilter=deviceFilter)
 
             prompt = "=(05)> "
             printi("1. Default Input")
@@ -1916,9 +1970,7 @@ if __name__ == "__main__":
         ### GATHER MACS ###
         '''             '''
         if choice == "6":
-            networks, devices = checkVariables(networks=networks, devices=devices,
-                                               networkFilter=networkFilter, deviceFilter=deviceFilter)
-            dashboard, found = getDashboard(apikey=apikey, maxRetry=10)
+
             prompt = "=(06)> "
             if bool(macDict):
                 printi("MAC data already exists from a previous run")
@@ -1978,8 +2030,6 @@ if __name__ == "__main__":
         ### GET SWTICH VLANS ###
         '''                  '''
         if choice == "7":
-            networks, devices = checkVariables(networks=networks, devices=devices,
-                                               networkFilter=networkFilter, deviceFilter=deviceFilter)
 
             prompt = "=(07)> "
             printi("1. Enter source switch Name, Serial, or IP")
@@ -2057,8 +2107,6 @@ if __name__ == "__main__":
         ### PRINTING PORT INFORMATION ###
         '''                           '''
         if choice == "8":
-            networks, devices = checkVariables(networks=networks, devices=devices,
-                                               networkFilter=networkFilter, deviceFilter=deviceFilter)
 
             prompt = "=(08)> "
             printi("1. List single device")
@@ -2121,8 +2169,7 @@ if __name__ == "__main__":
         if choice == "9":
 
             printi("Starting ACL Tool...")
-            networks, devices = checkVariables(networks=networks, devices=devices,
-                                               networkFilter=networkFilter, deviceFilter=deviceFilter)
+
             prompt = "=(09)> "
             # Getting the network
             network = getNetwork(networks)
@@ -2335,8 +2382,7 @@ if __name__ == "__main__":
         '''                         '''
         if choice == "10":
             # This will eventually be expand out to include deletion and adding but for now it is just printing
-            networks, devices = checkVariables(networks=networks, devices=devices,
-                                               networkFilter=networkFilter, deviceFilter=deviceFilter)
+
             prompt = "=(10)> "
             if aggDict is None:
                 # Getting the network
@@ -2387,13 +2433,12 @@ if __name__ == "__main__":
         ### SETTING VARIABLES ###
         '''                   '''
         if choice == "11":
-            networks, devices = checkVariables(networks=networks, devices=devices,
-                                               networkFilter=networkFilter, deviceFilter=deviceFilter)
 
             prompt = "=(11)> "
-            printi("1. Manage Network Filters")
-            printi("2. Manage Switch Filters")
-            printi("3. Toggle Verbosity")
+            printi("1. Select Organizations")
+            printi("2. Manage Network Filters")
+            printi("3. Manage Switch Filters")
+            printi("4. Toggle Verbosity")
             printi("0. Go Back")
             subChoice = input(prompt)
 
@@ -2403,8 +2448,39 @@ if __name__ == "__main__":
                 if subChoice == "0":
                     break
 
-                # NETWORK FILTER
+                # ORGANIZATIONS
                 if subChoice == "1":
+                    tempOrgs = getOrganizations(dashboard)
+                    newOrgs = False
+                    if len(tempOrgs) == 0:
+                        printi("No new organizations selected")
+                    else:
+                        for org in tempOrgs:
+                            if org not in organizations:
+                                printi("Adding the %s organization to our list")
+                                organizations.append(org)
+                                newOrgs = True
+                    if newOrgs:
+                        newNetworks = False
+                        printi("1. Refresh network list with the newly added organizations")
+                        printi("0. Go back")
+                        subSubChoice = input("=> ")
+                        if subSubChoice == "1":
+                            networks = getNetworks(dashboard=dashboard,
+                                                   filterOut=networkFilter,
+                                                   organizations=organizations)
+                            printi("1. Refresh device list with the newly added networks")
+                            printi("0. Go back")
+                            subSubSubChoice = input("=> ")
+                            if subSubSubChoice == "1":
+                                devices = getDevices(dashboard=dashboard,
+                                                     networks=networks,
+                                                     deviceFilter=deviceFilter,
+                                                     devices=devices
+                                                     )
+
+                # NETWORK FILTER
+                if subChoice == "2":
 
                     INDENT += 1
                     if networkFilter:
@@ -2444,7 +2520,9 @@ if __name__ == "__main__":
                             networkFilter.append(newfilter)
                             printi("New Filter: %s" % ','.join(newfilter))
 
-                            networks = getNetworks(dashboard=dashboard, filterOut=networkFilter)
+                            networks = getNetworks(dashboard=dashboard,
+                                                   filterOut=networkFilter,
+                                                   organizations=organizations)
 
                         elif subSubChoice == '2':
                             for network in networks:
@@ -2472,7 +2550,9 @@ if __name__ == "__main__":
                             subSubSubChoice = input(prompt).strip()
                             while subSubSubChoice != '0':
                                 found = False
-                                for network in getNetworks(dashboard=dashboard, filterOut=None):
+                                for network in getNetworks(dashboard=dashboard,
+                                                           organizations=organizations,
+                                                           filterOut=None):
                                     if 'name' in network and subSubSubChoice.lower() in network['name'].lower():
                                         printv("Network found %s " % network['name'])
                                         found = True
@@ -2519,7 +2599,7 @@ if __name__ == "__main__":
                     devices = getDevices(dashboard=dashboard, networks=networks, deviceFilter=deviceFilter)
 
                 # DEVICE FILTER
-                elif subChoice == "2":
+                elif subChoice == "3":
                     if deviceFilter:
                         INDENT += 1
                         printi("Current Filters:")
@@ -2650,7 +2730,7 @@ if __name__ == "__main__":
                     INDENT -= 1
 
                 # VERBOSITY TOGGLE
-                elif subChoice == "3":
+                elif subChoice == "4":
                     if VERBOSE:
                         VERBOSE = False
                         printi("Verbosity turned off")
@@ -2712,6 +2792,4 @@ if __name__ == "__main__":
                             json.dump(aggDict, f)
                             f.close()
                     INDENT -= 1
-
-
 
