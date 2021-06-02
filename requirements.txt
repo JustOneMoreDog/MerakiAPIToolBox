@@ -13,5 +13,5 @@ pyreadline==2.1
 requests==2.24.0
 tabulate==0.8.7
 termcolor==1.1.0
-urllib3==1.25.9
+urllib3==1.26.5
 yarl==1.4.2
